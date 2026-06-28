@@ -407,40 +407,8 @@
     </select>
   </div>
 
-  <!-- Display mode -->
-  <div class="option-row">
-    <label for="display-mode">Display mode</label>
-    <select id="display-mode">
-      <option value="subtitles" selected>Subtitles only &mdash; karaoke highlighting</option>
-      <option value="background">Background text only &mdash; full lyrics on screen (no timing)</option>
-      <option value="both">Both &mdash; karaoke subtitles + full text behind</option>
-    </select>
-  </div>
 
-  <!-- Word timing toggle -->
-  <div class="option-row" style="margin-top:1.2rem;">
-    <label for="word-timing" style="color:var(--muted);font-size:.85rem;cursor:pointer;display:flex;align-items:center;gap:.5rem;">
-      <input type="checkbox" id="word-timing" checked style="width:1rem;height:1rem;cursor:pointer;accent-color:var(--accent1);">
-      Word-by-word timing <span style="font-size:.78rem;">(highlight each word as it's sung)</span>
-    </label>
-  </div>
 
-  <!-- Video background -->
-  <div class="option-row">
-    <label for="video-bg">Video background</label>
-    <select id="video-bg">
-      <option value="color" selected>Dark background</option>
-      <option value="original">Original video (YouTube only)</option>
-      <option value="cover">Cover image (5s intro)</option>
-    </select>
-  </div>
-
-  <!-- Cover image upload (shown when "cover" selected) -->
-  <div class="option-row" id="cover-upload-row" style="display:none;align-items:flex-start;flex-direction:column;gap:.4rem;">
-    <label style="color:var(--muted);font-size:.85rem;">Cover image (optional — falls back to YouTube thumbnail)</label>
-    <input type="file" id="cover-input" accept="image/*"
-      style="font-size:.85rem;color:var(--muted);cursor:pointer;">
-  </div>
 
   <!-- Keep chorus toggle -->
   <div class="option-row" style="margin-top:1.2rem;">
@@ -572,11 +540,6 @@
     });
   });
 
-  // ── Video background toggle ──────────────────────────────────────────────
-  $('video-bg').addEventListener('change', () => {
-    $('cover-upload-row').style.display = $('video-bg').value === 'cover' ? 'flex' : 'none';
-  });
-
   // ── File drag-and-drop ────────────────────────────────────────────────────
   const dropZone = $('drop-zone');
   const fileInput = $('file-input');
@@ -602,24 +565,22 @@
     const fd = new FormData();
     fd.append('model', model);
     fd.append('language', language);
+
     const lyricsHint = $('lyrics-input').value.trim();
     if (lyricsHint) fd.append('lyrics_hint', lyricsHint);
-    fd.append('word_timing', $('word-timing').checked ? 'true' : 'false');
-    const displayMode = $('display-mode').value;
-    fd.append('display_mode', displayMode);
-    fd.append('static_video', displayMode === 'background' ? 'true' : 'false');
-    fd.append('show_bg_lyrics', displayMode === 'both' ? 'true' : 'false');
-    fd.append('keep_chorus', $('keep-chorus').checked ? 'true' : 'false');
-    const videoBg = $('video-bg').value;
-    fd.append('video_bg', videoBg);
-    if ($('cover-input').files[0]) {
-      fd.append('cover_image', $('cover-input').files[0]);
-    }
-    if (displayMode === 'background' && !lyricsHint) {
-      alert('Background text mode requires lyrics to be pasted in the lyrics field.');
-      $('btn-go').disabled = false;
-      return;
-    }
+
+    // Safely check for toggles in case they were removed
+    const wordTimingEl = $('word-timing');
+    fd.append('word_timing', wordTimingEl && wordTimingEl.checked ? 'true' : 'false');
+
+    const keepChorusEl = $('keep-chorus');
+    fd.append('keep_chorus', keepChorusEl && keepChorusEl.checked ? 'true' : 'false');
+
+    // Hardcode styling to our new dynamic backend engine
+    fd.append('display_mode', 'subtitles');
+    fd.append('static_video', 'false');
+    fd.append('show_bg_lyrics', 'false');
+    fd.append('theme', 'random');
 
     if (activeTab === 'file') {
       if (!fileInput.files[0]) { alert('Please select a file first.'); return; }
@@ -648,7 +609,6 @@
   });
 
   // ── Progress UI ───────────────────────────────────────────────────────────
-  // Map step keywords → step element ids + progress bar %
   const STEP_MAP = [
     { keywords: ['download', 'youtube', 'spotify', 'soundcloud', 'yandex', 'queued'], id: 'step-download', pct: 5  },
     { keywords: ['separat', 'demucs', 'vocal'],    id: 'step-separate', pct: 20 },
@@ -666,7 +626,6 @@
     $('lyrics-badge').classList.remove('visible');
     $('chorus-badge').classList.remove('visible');
     $('progress-bar').style.width = '2%';
-    // Hide download step if not YouTube
     $('step-download').style.display = isYoutube ? '' : 'none';
     resetSteps();
   }
@@ -674,13 +633,11 @@
   function resetSteps() {
     document.querySelectorAll('.step').forEach(s => {
       s.classList.remove('active', 'done', 'error');
-      // restore original icon (remove spinner)
       const icon = s.querySelector('.step-icon');
       if (icon && icon.dataset.orig) icon.innerHTML = icon.dataset.orig;
     });
   }
 
-  // Save original icons
   document.querySelectorAll('.step-icon').forEach(el => { el.dataset.orig = el.innerHTML; });
 
   function guessStep(stepText) {
@@ -702,14 +659,12 @@
     const { id: stepId } = match;
     const pct = job.pct ?? match.pct;
 
-    // Advance progress bar (pct from job overrides keyword-mapped value)
     const bar = $('progress-bar');
     const cur = parseFloat(bar.style.width) || 0;
     if (pct > cur) bar.style.width = pct + '%';
 
     if (!stepId || stepId === lastActiveStepId) return;
 
-    // Mark previous steps done
     let found = false;
     for (const { id } of STEP_MAP) {
       if (!id) continue;
@@ -800,7 +755,7 @@
     if (!files.video) $('dl-video').style.opacity = '.3';
     if (!files.minus) $('dl-minus').style.opacity = '.3';
     if (!files.ass)   $('dl-ass').style.opacity   = '.3';
-    // Show lyrics
+
     const lyricsText = job.lyrics_text || '';
     $('lyrics-result').value = lyricsText;
     $('lyrics-result').readOnly = true;
@@ -810,7 +765,6 @@
     $('lyrics-save-msg').textContent = '';
     $('lyrics-section').style.display = lyricsText ? '' : 'none';
 
-    // Reset rating
     ratingValues.text = 0; ratingValues.video = 0;
     buildStars('stars-text'); buildStars('stars-video');
     $('btn-rate').disabled = true;
@@ -824,7 +778,6 @@
     const el = $('error-msg');
     el.textContent = msg;
     el.style.display = '';
-    // Mark last active step as error
     if (lastActiveStepId) {
       const stepEl = $(lastActiveStepId);
       if (stepEl) {
@@ -902,12 +855,14 @@
     $('file-name').textContent = '';
     $('yt-url').value = '';
     $('lyrics-input').value = '';
-    $('word-timing').checked = true;
-    $('display-mode').value = 'subtitles';
-    $('video-bg').value = 'color';
-    $('cover-upload-row').style.display = 'none';
-    $('cover-input').value = '';
-    $('keep-chorus').checked = true;
+
+    // Safely check if elements still exist before resetting
+    const wordTimingEl = $('word-timing');
+    if (wordTimingEl) wordTimingEl.checked = true;
+
+    const keepChorusEl = $('keep-chorus');
+    if (keepChorusEl) keepChorusEl.checked = true;
+
     $('btn-go').disabled = false;
     $('form-card').style.display = '';
     $('progress-section').style.display = 'none';
@@ -928,13 +883,11 @@
     $('catalog-card').style.display = view === 'catalog' ? '' : 'none';
 
     if (view === 'create') {
-      // If a job is actively running, show progress; otherwise reset to fresh form
       const jobRunning = currentJobId && pollTimer;
       if (jobRunning) {
         $('form-card').style.display = 'none';
         $('progress-section').style.display = 'block';
       } else {
-        // Full reset
         clearInterval(pollTimer);
         currentJobId = null;
         lastActiveStepId = null;
@@ -942,12 +895,13 @@
         $('file-name').textContent = '';
         $('yt-url').value = '';
         $('lyrics-input').value = '';
-        $('word-timing').checked = true;
-        $('display-mode').value = 'subtitles';
-        $('video-bg').value = 'color';
-        $('cover-upload-row').style.display = 'none';
-        $('cover-input').value = '';
-        $('keep-chorus').checked = true;
+
+        const wordTimingEl = $('word-timing');
+        if (wordTimingEl) wordTimingEl.checked = true;
+
+        const keepChorusEl = $('keep-chorus');
+        if (keepChorusEl) keepChorusEl.checked = true;
+
         $('btn-go').disabled = false;
         $('form-card').style.display = '';
         $('progress-section').style.display = 'none';
@@ -967,7 +921,6 @@
     if (view === 'catalog') loadCatalog();
   }
 
-  // Initialize nav
   $('nav-create').classList.add('active');
 
   // ── Catalog ──────────────────────────────────────────────────────────────
@@ -1014,7 +967,6 @@
         </div>`;
     }).join('');
 
-    // Pagination
     const totalPages = Math.ceil(total / PAGE_SIZE);
     const pag = $('catalog-pagination');
     if (totalPages <= 1) { pag.innerHTML = ''; return; }
@@ -1066,13 +1018,11 @@
     const ta = $('lyrics-result');
     const isEditing = !ta.readOnly;
     if (isEditing) {
-      // Cancel edit
       ta.readOnly = true;
       ta.style.opacity = '.8';
       $('btn-lyrics-save').style.display = 'none';
       $('btn-lyrics-toggle').textContent = 'Edit';
     } else {
-      // Enable edit
       ta.readOnly = false;
       ta.style.opacity = '1';
       ta.style.borderColor = 'var(--accent1)';
@@ -1098,7 +1048,6 @@
       });
       const data = await res.json();
       if (data.retrying) {
-        // Hide results, show progress
         $('results-section').style.display = 'none';
         $('progress-bar').style.width = '45%';
         lastActiveStepId = null;
