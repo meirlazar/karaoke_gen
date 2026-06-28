@@ -6,8 +6,10 @@ services:
     volumes:
       - ./work:/app/work          # job outputs
       - model-cache:/root/.cache  # whisper + demucs model weights
+      - ./extrafonts:/usr/share/fonts/extrafonts:ro  # optional - point the source to where you keep your custom fonts to randomly assign
     environment:
-      - WHISPER_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER_DEVICE=cuda
+   #   - GENIUS_ACCESS_TOKEN=""  # optional
     restart: unless-stopped
     deploy:
       resources:
