@@ -105,10 +105,13 @@ def generate_static_ass(lyrics: str, duration: float, output_path: str) -> None:
         f.write(f"Dialogue: 0,{_fmt_time(0)},{_fmt_time(duration)},Karaoke,,0,0,0,,{r'\\N'.join(lines)}\n")
 
 def generate_ass(segments, output_path: str, word_timing: bool = True, background_lyrics: str = "", duration: float = 0) -> None:
+    # Cast generator to list immediately to prevent exhaustion
+    seg_list = list(segments)
     bg_lines = [l.strip() for l in background_lyrics.splitlines() if l.strip()]
     use_dual = bool(bg_lines)
 
-    dur_s = duration if duration > 0 else (max(s.end for s in segments) + 1 if segments else 3600)
+    # Safe duration calculation
+    dur_s = duration if duration > 0 else (max(s.end for s in seg_list) + 1 if seg_list else 3600)
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(_generate_dynamic_headers(_generate_color_palette(), use_dual, False))
@@ -117,4 +120,8 @@ def generate_ass(segments, output_path: str, word_timing: bool = True, backgroun
         if use_dual:
             f.write(f"Dialogue: 0,{_fmt_time(0)},{_fmt_time(dur_s)},BgLyrics,,0,0,0,,{r'\\N'.join(bg_lines)}\n")
 
-        f.writelines(f"{l}\n" for s in segments if (l := _segment_to_dialogue(s, word_timing)))
+        # Standard loop, no walrus operators
+        for s in seg_list:
+            line = _segment_to_dialogue(s, word_timing)
+            if line:
+                f.write(f"{line}\n")
