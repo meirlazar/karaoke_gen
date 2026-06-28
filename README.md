@@ -31,10 +31,10 @@ Local web app that takes a music track (file upload or URL from YouTube, Spotify
 
 ```bash
 # GPU (default)
-docker-compose up --build
+docker-compose up --build -d
 
 # CPU only
-WHISPER_DEVICE=cpu docker-compose up --build
+WHISPER_DEVICE=cpu docker-compose up --build -d
 
 # Open a web browser to http://localhost:8021
 ```
