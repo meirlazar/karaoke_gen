@@ -1,3 +1,7 @@
+# Karaoke Generator - Just add water...I mean your song.
+<img width="659" height="742" alt="image" src="https://github.com/user-attachments/assets/eb5bbf7a-d2b0-4941-a774-f008f204b1f6" />
+
+# Karaoke Song Generated...You are ready to rock!
 <img width="692" height="910" alt="image" src="https://github.com/user-attachments/assets/92034869-a8e5-458f-9a93-55063aff7ce2" />
 
 
