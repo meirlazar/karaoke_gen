@@ -175,10 +175,24 @@ def _run_transcription_and_render(
             segments = filtered
 
         _set(job_id, step="Generating karaoke subtitles...", pct=82)
-        from ass_gen import generate_ass  # noqa: PLC0415
+        from ass_gen import generate_ass, _generate_color_palette, _get_random_font  # noqa: PLC0415
         ass_path = job_dir / f"{safe}_karaoke.ass"
         bg_lyrics = (lyrics or lyrics_hint or "") if display_mode == "both" else ""
         duration = info.duration if display_mode == "both" else 0
+        
+        # Generate and log ASS styling
+        palette = _generate_color_palette()
+        font = _get_random_font()
+        font_size = 160
+        print(f"[DEBUG] ASS Styling Configuration:", flush=True)
+        print(f"[DEBUG]   Font: {font}", flush=True)
+        print(f"[DEBUG]   Font Size: {font_size}px", flush=True)
+        print(f"[DEBUG]   Background Color: {palette['bg']}", flush=True)
+        print(f"[DEBUG]   Primary Color (Sung): {palette['primary']}", flush=True)
+        print(f"[DEBUG]   Secondary Color (Unsung): {palette['secondary']}", flush=True)
+        print(f"[DEBUG]   Outline Color: {palette['outline']}", flush=True)
+        print(f"[DEBUG]   Shadow Color: {palette['shadow']}", flush=True)
+        
         generate_ass(segments, str(ass_path), word_timing=word_timing,
                      background_lyrics=bg_lyrics, duration=duration)
         jobs[job_id]["files"]["ass"] = str(ass_path)
