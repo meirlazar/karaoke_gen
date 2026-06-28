@@ -1,3 +1,6 @@
+<img width="692" height="910" alt="image" src="https://github.com/user-attachments/assets/92034869-a8e5-458f-9a93-55063aff7ce2" />
+
+
 # Karaoke Generator
 
 Local web app that takes a music track (file upload or URL from YouTube, Spotify, SoundCloud, Yandex Music) and produces:
