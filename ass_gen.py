@@ -36,9 +36,9 @@ def _generate_color_palette():
         sec_l  = random.uniform(0.45, 0.60) # Washed out grey
         outline_l = random.uniform(0.95, 1.0)
 
-    # 3. Secondary Text (Unsung): Sync the hue, but strip the saturation
-    sec_h = prim_h
-    sec_s = random.uniform(0.1, 0.3)
+    # 3. Secondary Text (Unsung): SHIFT hue for true contrast + reduce saturation
+    sec_h = (prim_h + random.uniform(0.25, 0.45)) % 1.0  # ← Shift hue by 90-160 degrees for complementary/triadic contrast
+    sec_s = random.uniform(0.5, 0.8)  # ← Keep secondary vibrant but less saturated than primary
 
     def hls_to_ass(h, l, s, alpha="00"):
         # Convert HLS floats to RGB integers (0-255)
@@ -67,7 +67,7 @@ PlayResX: 1920
 PlayResY: 1080
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Align, MarginL, MarginR, MarginV, Encoding
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Align, Ma[...]
 Style: Karaoke,{font},{sz},{palette['primary']},{palette['secondary']},{palette['outline']},{palette['shadow']},-1,0,0,0,100,100,2,0,1,4,2,5,10,10,80,1
 Style: Canvas,Arial,10,{palette['bg']},&H00000000&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,0,0,0,7,0,0,0,1
 """
