@@ -1,17 +1,18 @@
 services:
-  karaoke-gen:
-    build: .
+  karaoke_gen:
+    container_name: karaoke_gen
+    build: .               # uses the Dockerfile to build out the image if it is not already found locally
     ports:
-      - "8021:8000"
+      - "8021:8000"     # do not change the internal port 8000, only the host port if you want to get to the site through a different port assignment
     volumes:
-      - ./work:/app/work          # job outputs
+      - ./work:/app/work          # contains all files generated for each karaoke job
       - model-cache:/root/.cache  # whisper + demucs model weights
-      - ./extrafonts:/usr/share/fonts/extrafonts:ro  # optional - point the source to where you keep your custom fonts to randomly assign
+      - ./extrafonts:/usr/share/fonts/extrafonts:ro  # optional - add fonts in this dir, so it will add your custom fonts to its random selection
     environment:
-      - WHISPER_DEVICE=cuda
-   #   - GENIUS_ACCESS_TOKEN=""  # optional
+      - WHISPER_DEVICE=cuda      # Options are either "cpu" or "cuda" based on the hardware you have
+   #   - GENIUS_ACCESS_TOKEN=""  # optional if you have a genius token to use
     restart: unless-stopped
-    deploy:
+    deploy:                      # for exposing your gpu to the container
       resources:
         reservations:
           devices:
