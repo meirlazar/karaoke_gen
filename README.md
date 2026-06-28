@@ -31,18 +31,19 @@ Local web app that takes a music track (file upload or URL from YouTube, Spotify
 
 ```bash
 # GPU (default)
-docker compose up --build
+docker-compose up --build
 
 # CPU only
-WHISPER_DEVICE=cpu docker compose up --build
+WHISPER_DEVICE=cpu docker-compose up --build
 
-# open http://localhost:8000
+# Open a web browser to http://localhost:8021
 ```
 
 Requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for GPU mode.
 
 ### Loading Custom Fonts
-The app dynamically polls the OS font cache (`fc-list`) to randomize subtitle fonts. To inject custom fonts at runtime without rebuilding the image, map a host directory in your `docker-compose.yml`:
+The app dynamically polls the OS font cache (`fc-list`) to randomize subtitle fonts. 
+To inject custom fonts at runtime without rebuilding the image, map a host directory in your `docker-compose.yml`:
 
 ```yaml
     volumes:
