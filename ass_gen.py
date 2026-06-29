@@ -1,17 +1,54 @@
-"""
-ASS karaoke subtitle generator.
-Converts faster-whisper segments (with word timestamps) to an ASS file
-with \\kf (karaoke fill) tags for word-by-word highlighting.
+import random, subprocess, colorsys, sys
 
-Color convention (AABBGGRR in ASS):
-  PrimaryColour   = &H0000FFFF  — yellow  (word currently/already sung)
-  SecondaryColour = &H00FFFFFF  — white   (word not yet sung)
-  OutlineColour   = &H00000000  — black outline
-  BackColour      = &H80000000  — semi-transparent shadow
-"""
+def _get_random_font() -> str:
+    ignore = ["emoji", "math", "dingbats", "symbols", "webdings", "wingdings", "noto color", "cjk", "arabic", "korean", "bengali", "noto", "hebrew"]
+    try:
+        out = subprocess.check_output(['fc-list', ':', 'family'], text=True, stderr=subprocess.DEVNULL)
+        valid = [line.split(',')[0].strip() for line in out.split('\n') if line.strip() and not any(ig in line.lower() for ig in ignore)]
+        if valid: return random.choice(valid)
+    except Exception: pass
+    return "Arial"
 
-_ASS_HEADER = """\
-[Script Info]
+def _generate_color_palette():
+    """Generates a mathematically guaranteed high-contrast ASS color palette."""
+    is_dark_mode = random.choice([True, False])
+
+    bg_h = random.random()
+    bg_s = random.uniform(0.3, 0.7)
+    bg_l = random.uniform(0.05, 0.20) if is_dark_mode else random.uniform(0.80, 0.95)
+
+    prim_h = random.random()
+    prim_s = random.uniform(0.8, 1.0)
+
+    if is_dark_mode:
+        prim_l = random.uniform(0.75, 0.95)
+        sec_l  = random.uniform(0.40, 0.55)
+        outline_l = random.uniform(0.0, 0.05)
+    else:
+        prim_l = random.uniform(0.05, 0.20)
+        sec_l  = random.uniform(0.45, 0.60)
+        outline_l = random.uniform(0.95, 1.0)
+
+    sec_h = prim_h
+    sec_s = random.uniform(0.1, 0.3)
+
+    def hls_to_ass(h, l, s, alpha="00"):
+        r, g, b = (int(x * 255) for x in colorsys.hls_to_rgb(h, l, s))
+        return "&H{}{:02X}{:02X}{:02X}&".format(alpha, b, g, r)
+
+    return {
+        "bg": hls_to_ass(bg_h, bg_l, bg_s),
+        "primary": hls_to_ass(prim_h, prim_l, prim_s),
+        "secondary": hls_to_ass(sec_h, sec_l, sec_s),
+        "outline": hls_to_ass(prim_h, outline_l, 0.0),
+        "shadow": hls_to_ass(prim_h, outline_l, 0.0, alpha="80")
+    }
+
+def _generate_dynamic_headers(palette: dict, use_dual: bool = False, is_static: bool = False) -> str:
+    font = _get_random_font()
+    sz = 90 if is_static else 160
+
+    header = """[Script Info]
 Title: Karaoke
 ScriptType: v4.00+
 WrapStyle: 0
@@ -21,136 +58,69 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,72,&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,1,4,2,2,10,10,80,1
+Style: Karaoke,{},{},{},{},{},{},-1,0,0,0,100,100,2,0,1,4,2,5,10,10,80,1
+Style: Canvas,Arial,10,{},&H00000000&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,0,0,0,7,0,0,0,1
+""".format(font, sz, palette['primary'], palette['secondary'], palette['outline'], palette['shadow'], palette['bg'])
 
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
+    if use_dual:
+        header += "Style: BgLyrics,{},60,&H50FFFFFF&,&H50FFFFFF&,&H00000000&,&H80000000&,0,0,0,0,100,100,1,0,1,2,1,8,60,60,200,1\n".format(font)
 
-_ASS_HEADER_DUAL = """\
-[Script Info]
-Title: Karaoke
-ScriptType: v4.00+
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-PlayResX: 1920
-PlayResY: 1080
+    return header + "\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,72,&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,1,4,2,2,10,10,80,1
-Style: BgLyrics,Arial,28,&H50FFFFFF,&H50FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,1,0,1,2,1,8,60,60,30,1
+def _fmt_time(sec: float) -> str:
+    return "{}:{:02d}:{:05.2f}".format(int(sec // 3600), int((sec % 3600) // 60), sec % 60)
 
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-
-def _fmt_time(seconds: float) -> str:
-    """Format seconds as ASS timestamp H:MM:SS.cc"""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = seconds % 60
-    return f"{h}:{m:02d}:{s:05.2f}"
-
-
-def _segment_to_dialogue(segment, word_timing: bool = True) -> str:
-    """Build one ASS Dialogue line from a faster-whisper segment.
-
-    word_timing=True  — word-by-word \\kf highlighting
-    word_timing=False — plain text, whole line appears at once
-    """
-    start = _fmt_time(segment.start)
-    end = _fmt_time(segment.end)
-
+def _segment_to_dialogue(seg, word_timing: bool = True) -> str:
+    start, end = _fmt_time(seg.start), _fmt_time(seg.end)
     if not word_timing:
-        text = segment.text.strip()
-        if not text:
-            return ""
-        return f"Dialogue: 0,{start},{end},Karaoke,,0,0,0,,{text}"
+        return "Dialogue: 0,{},{},Karaoke,,0,0,0,,{}".format(start, end, seg.text.strip()) if seg.text.strip() else ""
+    if not seg.words: return ""
 
-    words = segment.words or []
-    if not words:
-        return ""
+    parts, prev = [], seg.start
+    for w in seg.words:
+        gap = w.start - prev
+        if gap > 0.10: parts.append("{{\\kf{}}}".format(max(1, int(round(gap * 100)))))
+        parts.append("{{\\kf{}}}{}".format(max(15, int(round((w.end - w.start) * 100))), w.word))
+        prev = w.end
 
-    MIN_WORD_CS = 15  # minimum 150ms per word to avoid flicker
-    GAP_THRESHOLD = 0.10  # ignore gaps shorter than 100ms (measurement noise)
-
-    parts: list[str] = []
-    prev_end = segment.start
-
-    for word in words:
-        gap_s = word.start - prev_end
-        if gap_s > GAP_THRESHOLD:
-            parts.append(f"{{\\kf{max(1, int(round(gap_s * 100)))}}}")
-        elif gap_s > 0:
-            # Small gap — absorb into word duration instead of creating a flicker gap
-            pass
-        dur_cs = max(MIN_WORD_CS, int(round((word.end - word.start) * 100)))
-        parts.append(f"{{\\kf{dur_cs}}}{word.word}")
-        prev_end = word.end
-
-    text = "".join(parts)
-    return f"Dialogue: 0,{start},{end},Karaoke,,0,0,0,,{text}"
-
+    return "Dialogue: 0,{},{},Karaoke,,0,0,0,,{}".format(start, end, ''.join(parts))
 
 def generate_static_ass(lyrics: str, duration: float, output_path: str) -> None:
-    """Create an ASS file showing the full lyrics as static text for the entire song."""
-    _STATIC_HEADER = """\
-[Script Info]
-Title: Karaoke
-ScriptType: v4.00+
-WrapStyle: 0
-ScaledBorderAndShadow: yes
-PlayResX: 1920
-PlayResY: 1080
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,Arial,40,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,2,0,1,3,2,5,80,80,80,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
     lines = [l.strip() for l in lyrics.splitlines() if l.strip()]
-    if not lines:
-        return
+    if not lines: return
 
-    start = _fmt_time(0)
-    end = _fmt_time(duration)
-    text = r"\N".join(lines)
-
+    dur_s = duration if duration > 0 else 3600
     with open(output_path, "w", encoding="utf-8") as f:
-        f.write(_STATIC_HEADER)
-        f.write(f"Dialogue: 0,{start},{end},Karaoke,,0,0,0,,{text}\n")
+        f.write(_generate_dynamic_headers(_generate_color_palette(), False, True))
+        f.write("Dialogue: -1,0:00:00.00,{},Canvas,,0,0,0,,{{\\pos(0,0)\\p1}}m 0 0 l 1920 0 l 1920 1080 l 0 1080{{\\p0}}\n".format(_fmt_time(dur_s)))
+        f.write("Dialogue: 0,{},{},Karaoke,,0,0,0,,{}\n".format(_fmt_time(0), _fmt_time(duration), '\\N'.join(lines)))
 
+def generate_ass(segments, output_path: str, word_timing: bool = True, background_lyrics: str = "", duration: float = 0) -> None:
+    seg_list = list(segments)
+    bg_lines = [l.strip() for l in background_lyrics.splitlines() if l.strip()]
+    use_dual = bool(bg_lines)
 
-def generate_ass(segments, output_path: str, word_timing: bool = True,
-                 background_lyrics: str = "", duration: float = 0) -> None:
-    """Write an ASS karaoke file from a list of faster-whisper segments.
+    print("[DEBUG] generate_ass called... bg_lyrics: {} lines, use_dual={}".format(len(bg_lines), use_dual), flush=True)
 
-    If background_lyrics is provided, the full lyrics are shown as dimmed static
-    text in the upper area (BgLyrics style) while karaoke highlighting runs at the bottom.
-    """
-    use_dual = bool(background_lyrics and background_lyrics.strip())
-    lines = [_ASS_HEADER_DUAL if use_dual else _ASS_HEADER]
+    dur_s = duration if duration > 0 else (max(s.end for s in seg_list) + 1 if seg_list else 3600)
+    print("[DEBUG] Final duration: {}s (calculated or provided)".format(dur_s), flush=True)
 
-    # Background lyrics — static full text for entire duration
-    if use_dual:
-        bg_lines = [l.strip() for l in background_lyrics.splitlines() if l.strip()]
-        if bg_lines:
-            if duration <= 0 and segments:
-                duration = max(seg.end for seg in segments) + 1
-            start = _fmt_time(0)
-            end = _fmt_time(duration or 300)
-            text = r"\N".join(bg_lines)
-            lines.append(f"Dialogue: 0,{start},{end},BgLyrics,,0,0,0,,{text}\n")
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(_generate_dynamic_headers(_generate_color_palette(), use_dual, False))
+            f.write("Dialogue: -1,0:00:00.00,{},Canvas,,0,0,0,,{{\\pos(0,0)\\p1}}m 0 0 l 1920 0 l 1920 1080 l 0 1080{{\\p0}}\n".format(_fmt_time(dur_s)))
 
-    # Karaoke lines
-    for seg in segments:
-        line = _segment_to_dialogue(seg, word_timing=word_timing)
-        if line:
-            lines.append(line + "\n")
+            if use_dual:
+                f.write("Dialogue: 0,{},{},BgLyrics,,0,0,0,,{}\n".format(_fmt_time(0), _fmt_time(dur_s), '\\N'.join(bg_lines)))
+                print("[DEBUG] Wrote background lyrics line with {} lines".format(len(bg_lines)), flush=True)
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+            dialogue_count = 0
+            for idx, s in enumerate(seg_list):
+                line = _segment_to_dialogue(s, word_timing)
+                if line:
+                    f.write("{}\n".format(line))
+                    dialogue_count += 1
+            print("[DEBUG] Successfully wrote {} dialogue lines".format(dialogue_count), flush=True)
+    except Exception as e:
+        print("[ERROR] Failed to write ASS file: {}".format(e), flush=True)
+        raise
