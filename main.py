@@ -27,7 +27,6 @@ RETRY_SETTINGS = [
 ]
 
 def _cleanup_memory(stage_name=""):
-    """Forces Python garbage collection and dumps PyTorch CUDA memory."""
     gc.collect()
     try:
         import torch
@@ -49,7 +48,6 @@ def _run(cmd: list, **kwargs) -> str:
     return result.stdout
 
 def _run_ffmpeg_with_progress(cmd: list, job_id: str, base_step: str, start_pct: int, end_pct: int, total_duration: float) -> None:
-    """Runs FFmpeg while intercepting stderr to provide real-time UI progress updates and logging."""
     logger.info("[FFMPEG START] Job {}: Executing command: {}".format(job_id, " ".join(cmd)))
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
 
@@ -57,15 +55,12 @@ def _run_ffmpeg_with_progress(cmd: list, job_id: str, base_step: str, start_pct:
     proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, universal_newlines=True, env=env)
 
     for line in proc.stderr:
-        # Parse FFmpeg output like: time=00:01:23.45
         m = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line)
         if m and total_duration > 0:
             h, m_min, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
             elapsed = (h * 3600) + (m_min * 60) + s
             prog_pct = min(1.0, elapsed / total_duration)
             current_pct = int(start_pct + ((end_pct - start_pct) * prog_pct))
-
-            # Log every ~10% internally so we don't spam the console, but update UI instantly
             _set(job_id, step="{} ({}%)...".format(base_step, int(prog_pct * 100)), pct=current_pct)
 
     proc.wait()
@@ -411,25 +406,21 @@ def process_audio(job_id: str, input_path: str, model: str, language: str = "aut
 
             cmd = [
                 FFMPEG,
-                  "-hwaccel", "cuda",
-                  "-hwaccel_output_format", "cuda",
-                  "-f", "lavfi", "-i", "color=c=0x0d0d1a:size=1920x1080:rate=25",
-                  "-i", str(minus_path),
-                  "-vf", "ass={},{}".format(ass_path, title_filter_static),
-                  "-shortest",
-                  "-c:v", "h264_nvenc",
-                  "-preset", "fast",
-                  "-rc", "vbr",
-                  "-cq", "30",                     # Lower quality
-                  "-b:v", "1500k",                 # Lower bitrate
-                  "-pix_fmt", "yuv420p",
-                  "-profile:v", "baseline",
-                  "-level", "4.0",
-                  "-c:a", "aac",
-                  "-b:a", "128k",                  # Optimized audio
-                  "-q:a", "4",
-                  "-movflags", "+faststart",
-                  str(video_path), "-y"
+                "-y",
+                "-f", "lavfi", "-i", "color=c=0x0d0d1a:size=1920x1080:rate=25",
+                "-i", str(minus_path),
+                "-vf", "ass={},{}".format(ass_path, title_filter_static),
+                "-shortest",
+                "-c:v", "h264_nvenc",
+                "-preset", "p2",
+                "-cq", "30",
+                "-b:v", "1500k",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "high",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                str(video_path)
             ]
 
             _run_ffmpeg_with_progress(cmd, job_id, "Rendering Static Video", 70, 99, duration)
@@ -505,28 +496,84 @@ def _transfer_whisper_timing(seg, lyric_words: list[str]):
 
 def _align_to_lyrics(segments, lyric_lines: list[str]):
     from types import SimpleNamespace
-    used, result = set(), []
-    for seg in segments:
-        if not re.findall(r"\S+", seg.text.strip()): result.append(seg); continue
-        best_idx, best_score = None, -1.0
-        for i, line in enumerate(lyric_lines):
-            if i in used: continue
-            score = difflib.SequenceMatcher(None, re.sub(r"[^\w\s]", "", seg.text.lower()), re.sub(r"[^\w\s]", "", line.lower())).ratio()
-            if score > best_score: best_score, best_idx = score, i
-        if best_idx is None or best_score < 0.15: result.append(seg); continue
+    import difflib
 
-        used.add(best_idx)
-        lyric_words = re.findall(r"\S+", lyric_lines[best_idx])
-        new_words = _transfer_whisper_timing(seg, lyric_words)
+    result = []
+    mapped_lines = []
 
-        if not new_words:
+    # Pass 1: Map lyrics to best available Whisper segments
+    matched_segments = set()
+    for line in lyric_lines:
+        clean_line = re.sub(r"[^\w\s]", "", line.lower()).strip()
+        if not clean_line: continue
+
+        best_seg = None
+        best_score = -1.0
+
+        for j, seg in enumerate(segments):
+            if j in matched_segments: continue
+            clean_seg = re.sub(r"[^\w\s]", "", seg.text.lower()).strip()
+            score = difflib.SequenceMatcher(None, clean_line, clean_seg).ratio()
+
+            # Boost if segment contains the line
+            if clean_line in clean_seg:
+                score += 0.5
+
+            if score > best_score:
+                best_score = score
+                best_seg = seg
+
+        lyric_words = re.findall(r"\S+", line)
+
+        if best_seg is not None and best_score > 0.15:
+            matched_segments.add(segments.index(best_seg))
+            new_words = _transfer_whisper_timing(best_seg, lyric_words)
+            if new_words:
+                mapped_lines.append({'line': line, 'words': new_words, 'start': new_words[0].start, 'end': new_words[-1].end, 'is_mapped': True})
+            else:
+                mapped_lines.append({'line': line, 'words': None, 'start': best_seg.start, 'end': best_seg.end, 'is_mapped': True})
+        else:
+            mapped_lines.append({'line': line, 'words': None, 'start': -1, 'end': -1, 'is_mapped': False})
+
+    # Pass 2: Interpolate missing lines (The Fix)
+    # We tether orphans to a 3s max window between valid mapped lines
+    last_valid_end = 0.0
+    for i, m in enumerate(mapped_lines):
+        if not m['is_mapped']:
+            # Look ahead for the next mapped anchor
+            next_start = last_valid_end + 3.0
+            for j in range(i + 1, len(mapped_lines)):
+                if mapped_lines[j]['is_mapped']:
+                    next_start = mapped_lines[j]['start']
+                    break
+
+            # Anchor to previous valid time + small offset
+            gap = max(0.5, next_start - last_valid_end)
+            m['start'] = last_valid_end + 0.2
+            # Force duration to be short (max 3s) so it doesn't drift
+            m['end'] = m['start'] + min(3.0, gap * 0.8)
+            m['is_mapped'] = True
+
+        last_valid_end = m['end']
+
+    # Pass 3: Finalize segments
+    for m in mapped_lines:
+        if not m['words']:
+            lyric_words = re.findall(r"\S+", m['line'])
+            dur = max(m['end'] - m['start'], 0.5)
             char_lengths = [max(len(w), 1) for w in lyric_words]
-            total_chars, cumulative = sum(char_lengths), 0
+            total_chars = max(sum(char_lengths), 1)
             new_words = []
-            for wi, word in enumerate(lyric_words):
-                new_words.append(SimpleNamespace(word=" {}".format(word), start=seg.start + max(seg.end - seg.start, 0.01) * (cumulative / total_chars), end=seg.start + max(seg.end - seg.start, 0.01) * ((cumulative + char_lengths[wi]) / total_chars), probability=1.0))
-                cumulative += char_lengths[wi]
-        result.append(SimpleNamespace(start=seg.start, end=seg.end, text=" {}".format(lyric_lines[best_idx]), words=new_words))
+            cum = 0
+            for w, c_len in zip(lyric_words, char_lengths):
+                w_start = m['start'] + dur * (cum / total_chars)
+                w_end = m['start'] + dur * ((cum + c_len) / total_chars)
+                new_words.append(SimpleNamespace(word=" " + w, start=w_start, end=w_end, probability=0.5))
+                cum += c_len
+            m['words'] = new_words
+
+        result.append(SimpleNamespace(start=m['start'], end=m['end'], text=" " + m['line'], words=m['words']))
+
     return result
 
 def _run_transcription_and_render(job_id, input_path, vocals_wav, minus_path, model, language, lyrics_hint, lyrics, safe, title, job_dir, whisper_settings=None, word_timing=False, synced_lines=None, display_mode="subtitles", video_bg="color", cover_path="", original_video=""):
@@ -661,7 +708,6 @@ def _run_transcription_and_render(job_id, input_path, vocals_wav, minus_path, mo
         _set(job_id, step="Generating karaoke subtitles...", pct=82)
         ass_path = job_dir / "{}_karaoke.ass".format(safe)
 
-        # This passes the aligned segments directly to your f-string-free ass_gen.py
         ass_gen.generate_ass(segments, str(ass_path), word_timing=word_timing, background_lyrics=(lyrics or lyrics_hint or "") if display_mode == "both" else "", duration=duration if display_mode == "both" else 0)
         jobs[job_id]["files"]["ass"] = str(ass_path)
         logger.info("[PHASE 4 SUCCESS] ASS generation took {:.2f}s".format(time.time() - t_start))
@@ -684,23 +730,34 @@ def _run_transcription_and_render(job_id, input_path, vocals_wav, minus_path, mo
         safe_title = title.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
         title_filter = "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf:fontsize=36:fontcolor=white@0.7:x=(w-text_w)/2:y=30:shadowcolor=black@0.6:shadowx=2:shadowy=2".format(safe_title)
 
+        encode_args = [
+            "-c:v", "h264_nvenc",
+            "-preset", "p2",
+            "-cq", "30",
+            "-b:v", "1500k",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "high",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(video_path)
+        ]
+
         if video_bg == "original" and original_video and Path(original_video).exists():
             ffmpeg_cmd = [
                 FFMPEG,
-                "-hwaccel", "cuda",
-                "-hwaccel_output_format", "cuda",
-                "-i", original_video, "-i", str(minus_path),
-                "-vf", "scale_cuda=1920:1080:force_original_aspect_ratio=decrease,pad_cuda=1920:1080:(ow-iw)/2:(oh-ih)/2,ass={},{}".format(ass_path, title_filter),
-                "-map", "0:v", "-map",
-                "1:a", "-shortest"
-            ]
+                "-y",
+                "-i", original_video,
+                "-i", str(minus_path),
+                "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,ass={},{}".format(ass_path, title_filter),
+                "-map", "0:v", "-map", "1:a", "-shortest"
+            ] + encode_args
         elif video_bg == "cover" and cover_path and Path(cover_path).exists():
             bg_dur = max(0.1, duration - 5.0)
-            filter_str = "[0:v]scale_cuda=1920:1080:force_original_aspect_ratio=decrease,pad_cuda=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[cover];[1:v]trim=duration={0:.3f},setpts=PTS-STARTPTS[bg];[cover][bg]concat=n=2:v=1:a=0[base];[base]ass={1},{2}[vout]".format(bg_dur, ass_path, title_filter)
+            filter_str = "[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1[cover];[1:v]trim=duration={0:.3f},setpts=PTS-STARTPTS[bg];[cover][bg]concat=n=2:v=1:a=0[base];[base]ass={1},{2}[vout]".format(bg_dur, ass_path, title_filter)
             ffmpeg_cmd = [
                 FFMPEG,
-                "-hwaccel", "cuda",
-                "-hwaccel_output_format", "cuda",
+                "-y",
                 "-loop", "1",
                 "-t", "5.0", "-i", cover_path,
                 "-f", "lavfi",
@@ -710,35 +767,17 @@ def _run_transcription_and_render(job_id, input_path, vocals_wav, minus_path, mo
                 "-map", "[vout]",
                 "-map", "2:a",
                 "-shortest"
-            ]
+            ] + encode_args
         else:
             ffmpeg_cmd = [
                 FFMPEG,
-                "-hwaccel", "cuda",
-                "-hwaccel_output_format", "cuda",
+                "-y",
                 "-f", "lavfi", "-i", "color=c=0x0d0d1a:size=1920x1080:rate=25",
                 "-i", str(minus_path),
                 "-vf", "ass={},{}".format(ass_path, title_filter),
                 "-shortest"
-            ]
+            ] + encode_args
 
-        ffmpeg_cmd.extend([
-          "-c:v", "h264_nvenc",
-          "-preset", "fast",
-          "-rc", "vbr",
-          "-cq", "30",
-          "-b:v", "1500k",
-          "-pix_fmt", "yuv420p",
-          "-profile:v", "baseline",
-          "-level", "4.0",
-          "-c:a", "aac",
-          "-b:a", "128k",
-          "-q:a", "4",
-          "-movflags", "+faststart",
-          str(video_path), "-y"
-        ])
-
-        # Use our new progress-tracking execution engine
         _run_ffmpeg_with_progress(ffmpeg_cmd, job_id, "Rendering Video", 88, 99, duration)
 
         jobs[job_id]["files"]["video"] = str(video_path)
@@ -822,7 +861,7 @@ def _generate_thumbnail(title: str, output_path: str) -> None:
     artist, song = _parse_artist_title(title)
     text_val = "{}\\n{}".format(artist, song) if artist else safe_title
     vf_str = "drawtext=text='{}':fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf:fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2-40:shadowcolor=black:shadowx=3:shadowy=3,drawtext=text='KARAOKE':fontfile=/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf:fontsize=36:fontcolor=yellow:x=(w-text_w)/2:y=(h/2)+50:shadowcolor=black:shadowx=2:shadowy=2".format(text_val)
-    _run([FFMPEG, "-f", "lavfi", "-i", "color=c=0x0d0d1a:size=1280x720:d=1", "-vf", vf_str, "-frames:v", "1", "-update", "1", str(output_path), "-y"])
+    _run([FFMPEG, "-y", "-f", "lavfi", "-i", "color=c=0x0d0d1a:size=1280x720:d=1", "-vf", vf_str, "-frames:v", "1", "-update", "1", str(output_path)])
 
 def _generate_youtube_metadata(job_id: str, title: str, lyrics: str, output_path: str) -> None:
     artist, song = _parse_artist_title(title)
