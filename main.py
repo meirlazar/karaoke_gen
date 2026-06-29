@@ -1,21 +1,6 @@
-import os
-import re
-import sys
-import subprocess
-import urllib.parse
-import urllib.request
-import json
-import zipfile
-import shutil
-import difflib
-import uuid
-import logging
-import traceback
-import gc
-import time
+import os, re, sys, subprocess, urllib.parse, urllib.request, json, zipfile, shutil, difflib, uuid, logging, traceback, gc, time
 from pathlib import Path
 from typing import Any, Dict, Optional
-
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
